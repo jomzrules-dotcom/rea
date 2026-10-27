@@ -53,9 +53,16 @@ class Character:
     style: str = "pixel-art chibi"
     game: str = "top-down action RPG"
     heads_tall: float = 2.5
-    accent: str | None = None  # e.g. "red scarf"
+    accent: str | None = None  # main accent colour piece, e.g. "red scarf"
+    loose_part: str | None = None  # a separately animated hanging piece, e.g. "scarf tail"
+    name: str | None = None  # short title for the prompt file
     weapon: str | None = None  # e.g. "short sword"
     hairstyles: list[str] = field(default_factory=list)
+    sprite_px: int = 64  # final square game frame; the character is ~69% of it tall
+
+    @property
+    def sprite_height(self) -> int:
+        return round(self.sprite_px * 44 / 64)
 
 
 @dataclass
@@ -94,12 +101,20 @@ def _style(c: Character) -> str:
             f"roughly left-right symmetric design, about {c.heads_tall:g} heads tall.")
 
 
+def _readability(c: Character) -> str:
+    return (
+        f"Target: a {c.sprite_px}x{c.sprite_px} px game sprite with the character about {c.sprite_height} px tall. "
+        "Draw it large and clean, but design for that size: big readable silhouette, large head and eyes, bold "
+        "colour blocks, at most one or two signature details, no thin lines, small patterns or text."
+    )
+
+
 def design_prompt(c: Character) -> str:
     gear = f" Carrying: {c.weapon}." if c.weapon else ""
     return (
         f"{c.style.capitalize()} character for a {c.game}: {c.description}.{gear} "
         "Relaxed A-pose, 45° front-left view (facing down-left), full body.\n"
-        f"{_colour_rules(c)}\n{_style(c)}"
+        f"{_readability(c)}\n{_colour_rules(c)}\n{_style(c)}"
     )
 
 
@@ -110,7 +125,7 @@ def turnaround_prompt(c: Character, views: list[str]) -> str:
         f"views side by side, left to right: {order}.\n"
         "Relaxed A-pose in every view, same height, same scale, feet on one shared baseline, same palette and "
         "outline as the design. Clear empty space between the figures.\n"
-        f"{_colour_rules(c)}\n{_style(c)}"
+        f"{_readability(c)}\n{_colour_rules(c)}\n{_style(c)}"
     )
 
 
@@ -118,8 +133,8 @@ def _parts(c: Character) -> str:
     extras = []
     if c.weapon:
         extras.append(f"the {c.weapon} as its own part next to the hand that holds it, with a small gap")
-    if c.accent:
-        extras.append(f"the {c.accent} tail (if any) as its own part")
+    if c.loose_part:
+        extras.append(f"the {c.loose_part} as its own part")
     tail = (", " + ", ".join(extras)) if extras else ""
     return ("head (hair attached), torso with hips, BOTH upper arms, BOTH forearms with hands, "
             f"BOTH thighs, BOTH shins with feet{tail}")
@@ -194,12 +209,13 @@ def prompt_pack(c: Character, directions: int = 8, layout: str = "separate",
     return PromptPack(
         c, views, layout, prompts,
         check_command=f"python3 -m spritekit check {drawings} --views {joined}",
-        build_command=f"python3 -m spritekit build {drawings} --views {joined} --bvh {bvh_path} --out out",
+        build_command=(f"python3 -m spritekit build {drawings} --views {joined} --bvh {bvh_path} "
+                       f"--size {c.sprite_px}x{c.sprite_px} --height {c.sprite_height} --out out"),
     )
 
 
 def to_markdown(pack: PromptPack) -> str:
-    lines = [f"# Sprite art prompts: {pack.character.description}", "",
+    lines = [f"# Sprite art prompts: {pack.character.name or pack.character.description}", "",
              f"Directions: {len(pack.views) * 2 - sum(v in ('front', 'back') for v in pack.views)} "
              f"(draw {len(pack.views)} views: {', '.join(VIEWS[v].label for v in pack.views)}; "
              "left-facing views are mirrored for the right-facing ones).", ""]

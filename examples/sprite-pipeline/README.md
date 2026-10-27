@@ -247,8 +247,11 @@ arms. Some instructions differ by view:
 
 `--layout separate` (default) asks for one image per view. That is more
 reliable than `--layout sheet`, which puts all views in one image, left to
-right. Other options: `--style`, `--game`, `--heads`, `--accent`, `--weapon`,
-`--hair`. Without `--out` the prompts are printed as Markdown; with `--out` you
+right. Other options: `--name`, `--style`, `--game`, `--heads`, `--accent`,
+`--loose-part` (a hanging piece such as a scarf tail, drawn as its own part),
+`--weapon`, `--hair` and `--sprite-size` (default 64). `--sprite-size` tells the model
+the final frame size so it designs for readability, and is passed to the
+suggested build command. Without `--out` the prompts are printed as Markdown; with `--out` you
 also get `prompts.json`.
 
 ### Checking what comes back

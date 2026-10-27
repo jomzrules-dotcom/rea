@@ -219,7 +219,8 @@ class MotionTests(unittest.TestCase):
 
 class PromptTests(unittest.TestCase):
     def test_eight_direction_pack_covers_five_views(self):
-        c = pr.Character("young knight, blue tunic", accent="red scarf", weapon="short sword", hairstyles=["bob", "spiky"])
+        c = pr.Character("young knight, blue tunic", accent="red scarf", loose_part="scarf tail", weapon="short sword",
+                         hairstyles=["bob", "spiky"], name="Knight")
         pack = pr.prompt_pack(c, 8)
         self.assertEqual(pack.views, ["front", "front_left", "side_left", "back_left", "back"])
         steps = [p.step for p in pack.prompts]
@@ -232,6 +233,7 @@ class PromptTests(unittest.TestCase):
             self.assertIn("exactly 9 dots", p.text)
             self.assertIn("#FF00FF", p.text)
             self.assertIn("short sword", p.text)
+            self.assertIn("the scarf tail as its own part", p.text)
             self.assertEqual(p.attach, ["design.png", "turnaround.png"])
         self.assertIn("LEFT of the near arm", exploded[2].text)  # side view convention used by the rig
         for v in pack.views:
@@ -240,6 +242,13 @@ class PromptTests(unittest.TestCase):
         self.assertIn("view_front.png view_front_left.png", pack.build_command)
         md = pr.to_markdown(pack)
         self.assertIn("Directions: 8", md)
+        self.assertTrue(md.startswith("# Sprite art prompts: Knight\n"))
+        no_tail = pr.prompt_pack(pr.Character("mage", accent="green lining"), 4)
+        self.assertNotIn("tail", no_tail.prompts[-1].text)
+        self.assertIn("64x64 px game sprite with the character about 44 px tall", pack.prompts[0].text)
+        self.assertIn("--size 64x64 --height 44", pack.build_command)
+        small = pr.prompt_pack(pr.Character("imp", sprite_px=32), 4)
+        self.assertIn("32x32 px game sprite with the character about 22 px tall", small.prompts[0].text)
 
     def test_four_direction_sheet_layout(self):
         pack = pr.prompt_pack(pr.Character("mage"), 4, "sheet")
