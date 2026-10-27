@@ -189,7 +189,9 @@ def project(cycle: Cycle, view: str, pitch: float = 15.0) -> ViewMotion:
     """Project a cycle through an orthographic camera and measure 2D bone tracks.
 
     Mocap sides are mapped to screen sides: the side whose limb projects further
-    left becomes ``a`` (screen-left), matching how rig dots are labelled.
+    left becomes ``a`` (screen-left), matching how rig dots are labelled. In a
+    profile view, where both sides project to the same x, ``a`` is the far side
+    (the prompts ask for far limbs drawn to the left of the near ones).
     """
     yaw = VIEW_YAW[view]
     cam = _rot_x(pitch) @ _rot_y(yaw)
@@ -199,9 +201,15 @@ def project(cycle: Cycle, view: str, pitch: float = 15.0) -> ViewMotion:
         proj[k] = np.stack([q[:, 0], -q[:, 1], -q[:, 2]], axis=1)  # screen x, screen y (down), depth
     side_map = {}
     for limb, joint in (("arm", "shoulder"), ("leg", "hip")):
-        lx = proj[f"{joint}_L"][:, 0].mean()
-        rx = proj[f"{joint}_R"][:, 0].mean()
-        side_map[limb] = {"a": "L", "b": "R"} if lx < rx else {"a": "R", "b": "L"}
+        lx, rx = proj[f"{joint}_L"][:, 0].mean(), proj[f"{joint}_R"][:, 0].mean()
+        ld, rd = proj[f"{joint}_L"][:, 2].mean(), proj[f"{joint}_R"][:, 2].mean()
+        if abs(lx - rx) < 0.25 * abs(ld - rd):
+            # profile view: both sides project to the same x, so the drawing
+            # convention decides: the far limb is drawn on the screen-left
+            left_is_a = ld > rd
+        else:
+            left_is_a = lx < rx
+        side_map[limb] = {"a": "L", "b": "R"} if left_is_a else {"a": "R", "b": "L"}
     vm = ViewMotion(view, yaw, pitch, cycle.frame_ms)
     cos_p = math.cos(math.radians(pitch))
     for bone, (j0, j1) in BONES.items():

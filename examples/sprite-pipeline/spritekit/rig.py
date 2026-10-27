@@ -137,7 +137,12 @@ def _split_figures(parts: list[_Blob], n: int) -> list[list[_Blob]]:
         reach = max(reach, x1)
     if len(gaps) < n - 1:
         raise RigError(f"expected {n} figures side by side, found {len(gaps) + 1}")
-    cuts = sorted(c for _, c in sorted(gaps, reverse=True)[: n - 1])
+    ranked = sorted(gaps, reverse=True)
+    if len(ranked) > n - 1 and ranked[n - 1][0] >= 0.5 * ranked[n - 2][0]:
+        # an unused gap as wide as the used ones means there are more figures than views
+        found = 1 + sum(g >= 0.5 * ranked[n - 2][0] for g, _ in ranked)
+        raise RigError(f"expected {n} figures side by side, found {found}")
+    cuts = sorted(c for _, c in ranked[: n - 1])
     groups: list[list[_Blob]] = [[] for _ in range(n)]
     for p in parts:
         groups[int(np.searchsorted(cuts, p.centroid[0]))].append(p)
@@ -168,8 +173,16 @@ def _label_dots(dots: list[np.ndarray]) -> dict[str, np.ndarray]:
 # main entry
 
 
-def auto_rig(arr: np.ndarray, views: list[str], params: RigParams | None = None) -> list[Rig]:
-    """Rig every figure in an exploded-view drawing (figures ordered left to right)."""
+@dataclass
+class Segmentation:
+    clean: np.ndarray  # drawing with background and joint dots made transparent
+    labels: np.ndarray
+    figures: list[tuple[list[_Blob], list[np.ndarray]]]  # (parts, joint dots) per figure, left to right
+    magenta_fraction: float
+
+
+def segment(arr: np.ndarray, figures: int, params: RigParams | None = None) -> Segmentation:
+    """Key the background, find parts and joint dots, and group them into figures."""
     params = params or RigParams()
     dot_mask = im.green_dot_mask(arr)
     grown = dot_mask.copy()
@@ -177,7 +190,8 @@ def auto_rig(arr: np.ndarray, views: list[str], params: RigParams | None = None)
     grown[:-1] |= dot_mask[1:]
     grown[:, 1:] |= dot_mask[:, :-1]
     grown[:, :-1] |= dot_mask[:, 1:]
-    fg = im.key_magenta(arr) & ~grown
+    keyed = im.key_magenta(arr)
+    fg = keyed & ~grown
     clean = arr.copy()
     clean[~fg] = 0
 
@@ -189,16 +203,24 @@ def auto_rig(arr: np.ndarray, views: list[str], params: RigParams | None = None)
         ys, xs = np.nonzero(labels[b.y0:b.y1, b.x0:b.x1] == b.label)
         pts = np.stack([xs + b.x0 + 0.5, ys + b.y0 + 0.5], axis=1)
         parts.append(_Blob(b.label, pts, np.array([b.cx + 0.5, b.cy + 0.5]), (b.x0, b.y0, b.x1, b.y1)))
+    if not parts:
+        raise RigError("no body parts found on a #FF00FF background")
     dl, dn = im.label_components(dot_mask)
     dots = [np.array([b.cx + 0.5, b.cy + 0.5]) for b in im.blobs(dl, dn) if b.area >= params.min_dot_area]
-
-    rigs = []
-    for view, group in zip(views, _split_figures(parts, len(views))):
+    groups = []
+    for group in _split_figures(parts, figures):
         x0 = min(p.box[0] for p in group)
         x1 = max(p.box[2] for p in group)
-        fig_dots = [d for d in dots if x0 - 20 <= d[0] <= x1 + 20]
-        rigs.append(_rig_figure(view, clean, labels, group, fig_dots, params))
-    return rigs
+        groups.append((group, [d for d in dots if x0 - 20 <= d[0] <= x1 + 20]))
+    return Segmentation(clean, labels, groups, float((~keyed).mean()))
+
+
+def auto_rig(arr: np.ndarray, views: list[str], params: RigParams | None = None) -> list[Rig]:
+    """Rig every figure in an exploded-view drawing (figures ordered left to right)."""
+    params = params or RigParams()
+    seg = segment(arr, len(views), params)
+    return [_rig_figure(view, seg.clean, seg.labels, parts, dots, params)
+            for view, (parts, dots) in zip(views, seg.figures)]
 
 
 def _rig_figure(view: str, clean: np.ndarray, labels: np.ndarray, parts: list[_Blob],

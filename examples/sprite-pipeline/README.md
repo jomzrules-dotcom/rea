@@ -9,6 +9,12 @@ directions:
 - **Build** takes a drawn character and turns it into a rigged, motion-capture
   animated pixel-art sprite sheet with Aseprite-compatible JSON, GIF previews
   and an HTML viewer.
+- **Prompts** writes the prompts an image model (Codex) needs to draw that
+  character: the base model, a turnaround, and an exploded rig view for each of
+  front, 45° front, side, 45° back and back. It also checks the returned art
+  and writes corrective prompts.
+
+[`SKILL.md`](SKILL.md) is the same workflow written as instructions for an agent.
 
 The rest of this page explains what the process does and why each step is
 needed for an accurate result.
@@ -22,18 +28,24 @@ cd examples/sprite-pipeline
 python3 -m pip install numpy pillow        # if not already installed
 ./fetch_mocap.sh mocap                     # CMU walk 07_01 (free for any use)
 
-# 1. End-to-end demo with a synthetic character
-python3 -m spritekit demo --bvh mocap/07_01.bvh --out demo-out
+# 1. End-to-end demo with a synthetic character (4 or 8 directions)
+python3 -m spritekit demo --bvh mocap/07_01.bvh --directions 8 --out demo-out
 #    demo-out/sheet.png, sheet.json, viewer.html, previews/*.gif, rig_debug.png, report.json
 
-# 2. Your own exploded-view drawing (two figures: 45° front-left, 45° back-left)
-python3 -m spritekit build my_hero.png --views front_left,back_left --bvh mocap/07_01.bvh --out out
+# 2. Your own character: prompts for the image model -> check the art -> build
+python3 -m spritekit prompts --character "young knight, blue tunic, short brown hair" \
+    --accent "red scarf" --weapon "short sword" --out art
+#    ...send each prompt in art/prompts.md to Codex, save the images it returns...
+python3 -m spritekit check view_front.png view_front_left.png view_side_left.png view_back_left.png view_back.png \
+    --views front,front_left,side_left,back_left,back
+python3 -m spritekit build view_front.png view_front_left.png view_side_left.png view_back_left.png view_back.png \
+    --views front,front_left,side_left,back_left,back --bvh mocap/07_01.bvh --out out
 
 # 3. Reverse-engineer someone's sheet or animated GIF
 python3 -m spritekit analyze hero_walk.png --out analysis
 python3 -m spritekit analyze hero_walk.gif --out analysis   # keeps the real durations
 
-# tests (about 5 s)
+# tests (about 10 s)
 python3 -m unittest discover -s tests
 ```
 
@@ -142,7 +154,7 @@ Hand-keyed sine curves look like a puppet or a zombie. The builder retargets
 4. **Symmetrize.** Average each joint with its mirrored partner half a cycle
    later. This removes the limp present in real captures.
 5. **Camera.** Orthographic, pitched 15° down. Yaw is 0 for front, −45 for
-   front-left, −135 for back-left and 180 for back. Mocap sides map to rig
+   front-left, −90 for side, −135 for back-left and 180 for back. Mocap sides map to rig
    sides by which one projects further left.
 6. **Delta retargeting.** Bone angle = projected angle minus its cycle mean,
    added to the drawing's own rest pose. This keeps chibi proportions and
@@ -190,8 +202,8 @@ lagging behind.
 
 ## Outputs
 
-- `sheet.png`: one row per animation and direction (`idle_sw`, `walk_ne`, …),
-  64×64 frames.
+- `sheet.png`: one row per animation and direction (`idle_s`, `idle_sw`, …,
+  `walk_se`), in compass order s, sw, w, nw, n, ne, e, se, with 64×64 frames.
 - `sheet.json`: Aseprite hash-style JSON with `frames[].duration`,
   `frames[].pivot` (normalized feet anchor) and `meta.frameTags` (one tag per
   row).
@@ -200,24 +212,54 @@ lagging behind.
 - `analyze --out` writes `analysis.json`, Aseprite JSON for the input sheet,
   per-frame PNGs, per-row GIFs and a viewer.
 
-## Image-model prompts
+## Prompts for the image model (`prompts.py`)
 
-Exploded rig views for 4-direction walking:
+The image model (Codex) draws; this toolkit rigs and animates. `spritekit
+prompts` writes every prompt the art needs, in order, with the file name to
+save each result under and the images to attach:
 
-```
-Using the attached character design, draw TWO exploded views side by side on one image:
-LEFT: 45° front-left view (facing down-left).  RIGHT: 45° back-left view (facing up-left).
-Exploded view: relaxed A-pose with every body part pulled slightly apart by a small even gap, each part in its natural position.
-Parts: head (hair attached), torso with hips, BOTH upper arms, BOTH forearms with hands, BOTH thighs, BOTH shins with feet.
-Draw the far arm and far leg too, slightly darker. Keep a clear gap between head and torso. No limb touches the torso.
-At EVERY joint put a small solid #00FF00 dot centred in the gap: neck, both shoulders, both elbows, both hips, both knees.
-Limb ends rounded so they overlap when rejoined; torso drawn complete under where the arms attach.
-Same scale, palette and outline as the design. Solid flat #FF00FF background, no shadows, no text.
-```
+| # | Prompt | Save as | Attach | Purpose |
+| --- | --- | --- | --- | --- |
+| 1 | Base model: character design | `design.png` | none | One full-body design in a 45° front-left A-pose. Fixes palette, proportions and outline |
+| 2 | Base model in every view | `turnaround.png` | design | Turnaround of the same character in each view, standing on one baseline. Keeps the views consistent |
+| 3+ | Exploded rig view, one per view | `view_<view>.png` | design, turnaround | The rig input: parts apart, 9 joint dots |
+| last | Hairstyle head sheet (with `--hair`) | `heads.png` | design | Hairstyle swaps |
 
-For 8 directions, also draw front, back and side views and pass
-`--views front,front_left,side_left,back_left,back` (figures in left-to-right
-order). Front and back views are not mirrored.
+Views per direction count (`--directions`):
+
+| Directions | Views drawn | Mirrored to make |
+| --- | --- | --- |
+| 8 (default) | front, 45° front-left, side (profile, facing left), 45° back-left, back | 45° front-right, side right, 45° back-right |
+| 4 | 45° front-left, 45° back-left | 45° front-right, 45° back-right |
+
+Every prompt repeats the rules the rig depends on: flat `#FF00FF` background;
+no pure green or magenta on the character; one hue with 3–4 shades per
+material; 1 px outline; no text or shadows. Every exploded prompt also asks for
+the 9 `#00FF00` dots, rounded limb ends and a torso drawn complete under the
+arms. Some instructions differ by view:
+
+- **front / back**: left and right limbs at the same brightness;
+- **45° views**: far arm and leg drawn too, slightly darker (the rig uses
+  mocap depth for draw order, so either screen side can be far);
+- **side**: far arm and leg shifted slightly to the LEFT of the near ones so
+  nothing overlaps. The rig treats the screen-left limb as the far one in
+  profile views.
+
+`--layout separate` (default) asks for one image per view. That is more
+reliable than `--layout sheet`, which puts all views in one image, left to
+right. Other options: `--style`, `--game`, `--heads`, `--accent`, `--weapon`,
+`--hair`. Without `--out` the prompts are printed as Markdown; with `--out` you
+also get `prompts.json`.
+
+### Checking what comes back
+
+`spritekit check` runs the rig's own segmentation on each returned image and
+reports anything that would break rigging. It checks for: a background that
+isn't flat magenta, the wrong number of figures, joint dots that aren't exactly
+9, parts touching or merged (fewer than 10 separate pieces), unrigable limb
+placement, and figures that are too small. For each problem it prints a
+**corrective prompt** to send back to the model with the drawing attached. It
+exits with 0 when everything is ready to build and 1 otherwise.
 
 ## Limits
 

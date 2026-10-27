@@ -11,6 +11,8 @@ motion   Gait-cycle extraction, symmetrization, camera projection, retargeting.
 render   Inverse-mapped skeletal renderer with soft joints.
 pixel    Hi-res to pixel-art reduction with a shared palette and outline.
 sheet    Sheet packing, Aseprite-compatible JSON, GIF previews.
+pipeline Picture -> rig -> poses -> pixel frames -> directions -> sheet.
+prompts  Image-model prompts (base model, turnaround, exploded views) and art checks.
 demo     Synthetic exploded-view character used by the demo and tests.
 """
 

@@ -19,6 +19,7 @@ from .sheet import Animation
 
 DIRECTION = {"front": "s", "front_left": "sw", "side_left": "w", "back_left": "nw", "back": "n"}
 FLIP = {"sw": "se", "w": "e", "nw": "ne"}
+COMPASS = ["s", "sw", "w", "nw", "n", "ne", "e", "se"]  # sheet row order within each animation
 
 
 @dataclass
@@ -169,15 +170,26 @@ def idle_clip(rig: Rig, params: BuildParams) -> Clip:
 # build
 
 
-def build(drawing: np.ndarray, views: list[str], mocap: bvh.Motion | None = None,
-          params: BuildParams | None = None, animations: tuple[str, ...] = ("idle", "walk")) -> BuildResult:
-    params = params or BuildParams()
+def rig_drawings(drawings: np.ndarray | list[np.ndarray], views: list[str], params: RigParams | None = None) -> list[Rig]:
+    """Rig one drawing holding every view (left to right), or one drawing per view."""
     for v in views:
         if v not in DIRECTION:
             raise ValueError(f"unknown view {v!r}; choose from {sorted(DIRECTION)}")
+    if isinstance(drawings, np.ndarray):
+        drawings = [drawings]
+    if len(drawings) == 1:
+        return auto_rig(drawings[0], views, params)
+    if len(drawings) != len(views):
+        raise ValueError(f"{len(drawings)} drawings for {len(views)} views: pass one drawing, or one per view")
+    return [auto_rig(d, [v], params)[0] for d, v in zip(drawings, views)]
+
+
+def build(drawing: np.ndarray | list[np.ndarray], views: list[str], mocap: bvh.Motion | None = None,
+          params: BuildParams | None = None, animations: tuple[str, ...] = ("idle", "walk")) -> BuildResult:
+    params = params or BuildParams()
     if "walk" in animations and mocap is None:
         raise ValueError("walk needs motion capture (BVH); see fetch_mocap.sh")
-    rigs = auto_rig(drawing, views, params.rig)
+    rigs = rig_drawings(drawing, views, params.rig)
     fw, fh = params.frame_size
     scale = params.char_height / max(r.height for r in rigs)
     win_w, win_h = fw / scale, fh / scale
@@ -235,7 +247,7 @@ def build(drawing: np.ndarray, views: list[str], mocap: bvh.Motion | None = None
             anim, d = key.rsplit("_", 1)
             if d in FLIP:
                 anims.append(Animation(f"{anim}_{FLIP[d]}", [f[:, ::-1].copy() for f in small[key]], clip.durations, pivot))
-    anims.sort(key=lambda a: (a.name.split("_")[0], a.name))
+    anims.sort(key=lambda a: (a.name.split("_")[0], COMPASS.index(a.name.rsplit("_", 1)[1])))
 
     report = {
         "views": views, "scale": round(scale, 4), "hires_canvas": list(canvas),

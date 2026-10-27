@@ -15,6 +15,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from spritekit import analyze, bvh, demo, motion, pipeline, render  # noqa: E402
+from spritekit import prompts as pr  # noqa: E402
 from spritekit import image as im  # noqa: E402
 from spritekit import rig as rigmod  # noqa: E402
 from spritekit import sheet as sh  # noqa: E402
@@ -208,6 +209,61 @@ class MotionTests(unittest.TestCase):
         self.assertGreater(vm.bones["thigh_a"].depth.mean(), vm.bones["thigh_b"].depth.mean())
 
 
+    def test_profile_view_maps_screen_left_to_far_side(self):
+        c = motion.extract_cycle(self.motion, 12)
+        for view in ("side_left", "front_left"):
+            vm = motion.project(c, view)
+            self.assertGreater(vm.bones["upper_arm_a"].depth.mean(), vm.bones["upper_arm_b"].depth.mean(), view)
+            self.assertGreater(vm.bones["thigh_a"].depth.mean(), vm.bones["thigh_b"].depth.mean(), view)
+
+
+class PromptTests(unittest.TestCase):
+    def test_eight_direction_pack_covers_five_views(self):
+        c = pr.Character("young knight, blue tunic", accent="red scarf", weapon="short sword", hairstyles=["bob", "spiky"])
+        pack = pr.prompt_pack(c, 8)
+        self.assertEqual(pack.views, ["front", "front_left", "side_left", "back_left", "back"])
+        steps = [p.step for p in pack.prompts]
+        self.assertEqual(steps, ["design", "turnaround"] + ["exploded"] * 5 + ["heads"])
+        exploded = [p for p in pack.prompts if p.step == "exploded"]
+        self.assertEqual([p.file for p in exploded], [f"view_{v}.png" for v in pack.views])
+        for p, v in zip(exploded, pack.views):
+            self.assertIn(pr.VIEWS[v].label, p.text)
+            self.assertIn("#00FF00", p.text)
+            self.assertIn("exactly 9 dots", p.text)
+            self.assertIn("#FF00FF", p.text)
+            self.assertIn("short sword", p.text)
+            self.assertEqual(p.attach, ["design.png", "turnaround.png"])
+        self.assertIn("LEFT of the near arm", exploded[2].text)  # side view convention used by the rig
+        for v in pack.views:
+            self.assertIn(pr.VIEWS[v].label, pack.prompts[1].text)  # turnaround lists every view
+        self.assertIn("--views front,front_left,side_left,back_left,back", pack.build_command)
+        self.assertIn("view_front.png view_front_left.png", pack.build_command)
+        md = pr.to_markdown(pack)
+        self.assertIn("Directions: 8", md)
+
+    def test_four_direction_sheet_layout(self):
+        pack = pr.prompt_pack(pr.Character("mage"), 4, "sheet")
+        self.assertEqual(pack.views, ["front_left", "back_left"])
+        self.assertEqual([p.file for p in pack.prompts], ["design.png", "turnaround.png", "views.png"])
+        self.assertIn("left to right", pack.prompts[-1].text)
+        self.assertIn("Directions: 4", pr.to_markdown(pack))
+
+    def test_review_accepts_good_art_and_explains_bad_art(self):
+        views = ["front", "front_left", "side_left", "back_left", "back"]
+        art, truth = demo.exploded_views(tuple(views))
+        self.assertTrue(pr.review(art, views).ok)
+        bad = art.copy()
+        x, y = truth[2]["knee_b"]
+        bad[int(y) - 5:int(y) + 6, int(x) - 5:int(x) + 6] = (255, 0, 255, 255)
+        result = pr.review(bad, views)
+        self.assertFalse(result.ok)
+        self.assertEqual([f.figure for f in result.findings], ["side_left"])
+        self.assertIn("exactly 9 solid #00FF00 dots", result.fix_prompt)
+        self.assertIn("In the side view", result.fix_prompt)
+        wrong = pr.review(art, views[:4])
+        self.assertIn("4 figure(s)", wrong.fix_prompt)
+
+
 class RigTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -308,6 +364,21 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(tags["walk_sw"]["to"] - tags["walk_sw"]["from"] + 1, 12)
 
 
+class EightDirectionTests(unittest.TestCase):
+    def test_five_views_one_drawing_per_view(self):
+        views = ["front", "front_left", "side_left", "back_left", "back"]
+        art, _ = demo.exploded_views(tuple(views))
+        per_view = [art[:, 300 * i:300 * (i + 1)] for i in range(len(views))]
+        res = pipeline.build(per_view, views, bvh.parse(demo.synthetic_walk_bvh()), animations=("walk",))
+        self.assertEqual([a.name for a in res.animations],
+                         [f"walk_{d}" for d in ("s", "sw", "w", "nw", "n", "ne", "e", "se")])
+        by = {a.name: a for a in res.animations}
+        for a, b in zip(by["walk_w"].frames, by["walk_e"].frames):
+            np.testing.assert_array_equal(a[:, ::-1], b)
+        with self.assertRaises(ValueError):
+            pipeline.build(per_view[:2], views, None, animations=("idle",))
+
+
 class CliTests(unittest.TestCase):
     def test_demo_and_analyze_commands(self):
         with tempfile.TemporaryDirectory() as d:
@@ -323,6 +394,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(report["frame_count"], 12)
             self.assertEqual(report["derived"]["pixel_scale"], 4)
             self.assertEqual(main(["build", str(out / "exploded.png"), "--anims", "walk", "--out", str(Path(d) / "b")]), 2)
+            self.assertEqual(main(["check", str(out / "exploded.png"), "--views", "front_left,back_left"]), 0)
+            self.assertEqual(main(["check", str(out / "exploded.png"), "--views", "front_left"]), 1)
+            pdir = Path(d) / "prompts"
+            self.assertEqual(main(["prompts", "--character", "rogue", "--out", str(pdir)]), 0)
+            pack = json.loads((pdir / "prompts.json").read_text())
+            self.assertEqual(pack["views"], ["front", "front_left", "side_left", "back_left", "back"])
+            self.assertTrue((pdir / "prompts.md").read_text().startswith("# Sprite art prompts: rogue"))
 
 
 if __name__ == "__main__":

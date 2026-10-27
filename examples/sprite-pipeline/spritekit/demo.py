@@ -45,13 +45,20 @@ def _shaded_capsule(draw, a, b, r, colour, dark=1.0, outline=3):
 def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) -> dict[str, tuple[float, float]]:
     """Draw one exploded figure; returns its joint dot positions."""
     back = view.startswith("back")
+    side_view = view.startswith("side")
     g2 = gap / 2
-    # torso
-    t0, t1, tw = 132.0, 222.0, 40.0
+    # torso (narrower in profile)
+    t0, t1 = 132.0, 222.0
+    tw = 28.0 if side_view else 40.0
     neck = (cx, t0 - g2)
-    # head (circle) sits g/2 above the neck joint
+    # head (circle) sits g/2 above the neck joint; the face turns with the view
     hr = 54.0
-    hc = (cx - (0 if back else 4), neck[1] - g2 - hr)
+    face_shift = {"front": 0, "front_left": -4, "side_left": -8}.get(view, 0)
+    hc = (cx + face_shift, neck[1] - g2 - hr)
+    eyes = {"front": (-18, 18), "front_left": (-26, 10), "side_left": (-36,)}.get(view, ())
+    # the far limbs are drawn slightly darker; which screen side is far depends on the view
+    far = {"front_left": "a", "side_left": "a", "back_left": "b"}.get(view)
+    toe = {"front_left": -1, "side_left": -1, "back_left": -1}.get(view, 0)
     draw.ellipse([hc[0] - hr, hc[1] - hr, hc[0] + hr, hc[1] + hr], fill=OUTLINE)
     if back:
         draw.ellipse([hc[0] - hr + 3, hc[1] - hr + 3, hc[0] + hr - 3, hc[1] + hr - 3], fill=_shade(HAIR, 0.8))
@@ -62,7 +69,7 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
         draw.ellipse([hc[0] - hr + 8, hc[1] - hr + 14, hc[0] + hr - 16, hc[1] + hr - 6], fill=SKIN)
         draw.pieslice([hc[0] - hr + 3, hc[1] - hr + 3, hc[0] + hr - 3, hc[1] + hr - 3], 180, 360, fill=HAIR)
         draw.chord([hc[0] - hr + 3, hc[1] - hr + 3, hc[0] + hr - 3, hc[1] + 12], 180, 360, fill=_shade(HAIR, 0.8))
-        for ex in (hc[0] - 26, hc[0] + 10):
+        for ex in (hc[0] + e for e in eyes):
             draw.ellipse([ex - 7, hc[1] + 6, ex + 7, hc[1] + 24], fill=OUTLINE)
             draw.ellipse([ex - 4, hc[1] + 9, ex + 1, hc[1] + 15], fill=(250, 250, 255))
     # torso rounded rect with belt
@@ -70,13 +77,14 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
     draw.rounded_rectangle([cx - tw + 3, t0 + 3, cx + tw - 3, t1 - 3], 12, fill=_shade(TUNIC, 0.8))
     draw.rounded_rectangle([cx - tw + 8, t0 + 6, cx + tw - 18, t1 - 22], 10, fill=TUNIC)
     draw.rectangle([cx - tw + 3, t1 - 28, cx + tw - 3, t1 - 18], fill=BOOTS)
-    if not back:
-        draw.rectangle([cx - 8, t1 - 30, cx + 6, t1 - 16], fill=(230, 200, 80))
+    if not back and not side_view:
+        bx = cx + face_shift
+        draw.rectangle([bx - 7, t1 - 30, bx + 7, t1 - 16], fill=(230, 200, 80))
 
     joints: dict[str, tuple[float, float]] = {"neck": neck}
-    # side "a" = screen left (far side in a 45° left-facing view), "b" = screen right
+    # side "a" = screen left, "b" = screen right
     for side, sx in (("a", -1), ("b", 1)):
-        dark = 0.82 if side == "a" else 1.0
+        dark = 0.82 if side == far else 1.0
         shoulder = (cx + sx * (tw + g2), t0 + 12)
         ang = math.radians(90 + sx * -42)  # A-pose: arms well away from the torso
         u = np.array([math.cos(ang), math.sin(ang)])
@@ -96,9 +104,8 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
         _shaded_capsule(draw, np.array(hip) + lu * (g2 + lr), knee - lu * (g2 + lr), lr, PANTS, dark)
         shin_end = ankle - lu * lr
         _shaded_capsule(draw, knee + lu * (g2 + lr), shin_end, lr - 1, PANTS, dark)
-        toe = -1 if not back else 1  # boots point down-left in front views
         boot_a = shin_end + np.array([0, -2])
-        boot_b = shin_end + np.array([toe * 12, 6])
+        boot_b = shin_end + np.array([toe * 12, 6 if toe else 8])
         _shaded_capsule(draw, boot_a, boot_b, lr - 1, BOOTS, dark)
         joints[f"hip_{side}"] = hip
         joints[f"knee_{side}"] = tuple(knee)
