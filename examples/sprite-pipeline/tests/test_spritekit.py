@@ -6,6 +6,7 @@ import json
 import math
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from spritekit import analyze, bvh, demo, motion, pipeline, render  # noqa: E402
+from spritekit import codex as cx  # noqa: E402
 from spritekit import prompts as pr  # noqa: E402
 from spritekit import image as im  # noqa: E402
 from spritekit import rig as rigmod  # noqa: E402
@@ -273,6 +275,113 @@ class PromptTests(unittest.TestCase):
         self.assertIn("4 figure(s)", wrong.fix_prompt)
 
 
+class CodexTests(unittest.TestCase):
+    """The codex runner with a stand-in for the CLI (real Codex needs a login and network)."""
+
+    def setUp(self):
+        self.pack = pr.prompt_pack(pr.Character("knight", name="Knight"), 8).to_json()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.art = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fake(self, bad_first: set[str] = frozenset(), fail: set[str] = frozenset()):
+        import threading
+        calls, lock, live = [], threading.Lock(), {"now": 0, "max": 0}
+
+        def runner(job, cmd, prompt, cwd, log):
+            with lock:
+                live["now"] += 1
+                live["max"] = max(live["max"], live["now"])
+                calls.append((job.name, cmd, prompt))
+                first = sum(c[0] == job.name for c in calls) == 1
+            time.sleep(0.05)
+            try:
+                if job.name in fail:
+                    return 1
+                if job.step == "exploded":
+                    art, truth = demo.exploded_views(tuple(job.views))
+                    if job.name in bad_first and first:
+                        x, y = truth[0]["knee_a"]
+                        art[int(y) - 5:int(y) + 6, int(x) - 5:int(x) + 6] = (255, 0, 255, 255)
+                else:
+                    art, _ = demo.exploded_views(("front",))
+                im.save_rgba(art, cwd / job.output)
+                return 0
+            finally:
+                with lock:
+                    live["now"] -= 1
+        return runner, calls, live
+
+    def test_jobs_and_command(self):
+        jobs = {j.name: j for j in cx.jobs_from_pack(self.pack)}
+        self.assertEqual(jobs["design"].after, [])
+        self.assertEqual(jobs["turnaround"].after, ["design"])
+        self.assertEqual(jobs["view_side_left"].after, ["design", "turnaround"])
+        self.assertEqual(jobs["view_side_left"].views, ["side_left"])
+        cmd = cx.codex_command(jobs["view_front"], self.art, "codex", "gpt-x")
+        self.assertEqual(cmd[:2], ["codex", "exec"])
+        for flag in ("--skip-git-repo-check", "--ephemeral", "-C", "-o", "-s"):
+            self.assertIn(flag, cmd)
+        self.assertEqual(cmd[cmd.index("--enable") + 1], "image_generation")
+        self.assertEqual(cmd[cmd.index("-m") + 1], "gpt-x")
+        images = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
+        self.assertEqual(images, [str(self.art / "design.png"), str(self.art / "turnaround.png")])
+        wrapped = cx.wrap(jobs["view_front"])
+        self.assertIn('save it as "view_front.png"', wrapped)
+        self.assertIn(jobs["view_front"].prompt, wrapped)
+
+    def test_run_orders_jobs_limits_parallelism_and_retries_bad_views(self):
+        runner, calls, live = self._fake(bad_first={"view_side_left"})
+        res = cx.run(self.pack, self.art, parallel=3, retries=2, runner=runner, log=lambda m: None)
+        self.assertTrue(all(r.status == "ok" for r in res.values()), {n: r.status for n, r in res.items()})
+        order = [c[0] for c in calls]
+        self.assertEqual(order[:2], ["design", "turnaround"])
+        self.assertLessEqual(live["max"], 3)
+        self.assertGreater(live["max"], 1)
+        self.assertEqual(res["view_side_left"].attempts, 2)
+        self.assertTrue((self.art / "view_side_left.try1.png").exists())
+        redo = [c for c in calls if c[0] == "view_side_left"][1]
+        self.assertIn("Redraw the attached exploded view (side view)", redo[2])
+        self.assertEqual(redo[1][redo[1].index("-i") + 1], str(self.art / "view_side_left.png"))
+        report = json.loads((self.art / "codex_run.json").read_text())
+        self.assertEqual(report["view_side_left"]["attempts"], 2)
+
+    def test_failed_reference_skips_dependants(self):
+        runner, calls, _ = self._fake(fail={"design"})
+        res = cx.run(self.pack, self.art, runner=runner, log=lambda m: None)
+        self.assertEqual(res["design"].status, "failed")
+        self.assertTrue(all(r.status == "skipped" for n, r in res.items() if n != "design"))
+        self.assertEqual([c[0] for c in calls], ["design"])
+
+    def test_retries_are_bounded(self):
+        runner, calls, _ = self._fake(bad_first=set())
+        always_bad = {"view_front"}
+
+        def stubborn(job, cmd, prompt, cwd, log):
+            code = runner(job, cmd, prompt, cwd, log)
+            if job.name in always_bad:
+                im.save_rgba(np.zeros((40, 40, 4), np.uint8), cwd / job.output)
+            return code
+        res = cx.run(self.pack, self.art, retries=1, runner=stubborn, log=lambda m: None)
+        self.assertEqual(res["view_front"].status, "failed")
+        self.assertEqual(res["view_front"].attempts, 2)
+        self.assertEqual(res["view_back"].status, "ok")
+
+    def test_powershell_script_reads_prompts_from_files(self):
+        script = cx.powershell_script(self.pack, parallel=3)
+        self.assertIn("$Throttle = 3", script)
+        self.assertIn("Get-Content -Raw -Encoding UTF8", script)
+        self.assertIn("UTF8Encoding", script)
+        self.assertNotIn("$args", script)
+        self.assertNotIn(self.pack["prompts"][0]["text"][:40], script)  # never inlined
+        self.assertLess(script.index("# wave 1: design"), script.index("# wave 2: turnaround"))
+        self.assertIn("Start-CodexJob 'view_side_left' @('design.png', 'turnaround.png')", script)
+        cx.write_prompt_files(self.pack, self.art)
+        self.assertIn('save it as "design.png"', (self.art / "codex_prompts" / "design.txt").read_text())
+
+
 class RigTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -410,6 +519,11 @@ class CliTests(unittest.TestCase):
             pack = json.loads((pdir / "prompts.json").read_text())
             self.assertEqual(pack["views"], ["front", "front_left", "side_left", "back_left", "back"])
             self.assertTrue((pdir / "prompts.md").read_text().startswith("# Sprite art prompts: rogue"))
+            self.assertEqual(main(["codex", str(pdir), "--dry-run"]), 0)
+            self.assertEqual(main(["codex", str(pdir), "--emit-ps1"]), 0)
+            self.assertTrue((pdir / "run_codex.ps1").exists())
+            self.assertEqual(main(["codex", str(pdir), "--codex", str(Path(d) / "no-such-codex")]), 2)
+            self.assertEqual(main(["codex", str(Path(d) / "empty")]), 2)
 
 
 if __name__ == "__main__":

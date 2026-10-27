@@ -1,6 +1,6 @@
 ---
 name: sprite-art-prompts
-description: Write image-model (Codex) prompts for a 2D game character's base model and its front, 45° front, side, 45° back and back exploded rig views; check the returned art; send corrective prompts; then build an animated sprite sheet with spritekit.
+description: Write image-model (Codex) prompts, run them through codex exec, for a 2D game character's base model and its front, 45° front, side, 45° back and back exploded rig views; check the returned art; send corrective prompts; then build an animated sprite sheet with spritekit.
 ---
 
 # Sprite art prompts
@@ -38,11 +38,24 @@ python3 -m spritekit prompts --character "<description>" --directions 8 \
    `view_back.png`). Attach the design and turnaround to each.
 4. **Head sheet** (`heads.png`), only if hairstyles were given.
 
-Send each prompt to Codex exactly as written, attach the listed images, and
+Ask Codex directly rather than pasting prompts by hand:
+
+```bash
+python3 -m spritekit codex art --dry-run   # show the codex exec jobs first
+python3 -m spritekit codex art             # design -> turnaround -> views, 3 at a time, auto re-ask
+```
+
+This needs the Codex CLI installed and signed in (`npm i -g @openai/codex`,
+`codex login`) and network access to `api.openai.com`. On Windows,
+`--emit-ps1` writes `run_codex.ps1` for PowerShell instead. Without Codex,
+send each prompt from `prompts.md` by hand, attach the listed images, and
 save each result under the listed file name. Keep `--layout separate` (one
 image per view) unless the user asks for one combined image.
 
 ## 3. Check every returned image before building
+
+`spritekit codex` already runs this check on every exploded view and re-asks
+Codex up to `--retries` times. Run it yourself for images made by hand.
 
 ```bash
 python3 -m spritekit check view_front.png view_front_left.png view_side_left.png view_back_left.png view_back.png \

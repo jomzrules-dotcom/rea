@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -180,6 +181,47 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_codex(args: argparse.Namespace) -> int:
+    from . import codex as cx
+
+    art = Path(args.art).resolve()
+    pack_path = art / "prompts.json"
+    if not pack_path.exists():
+        print(f"{pack_path} not found: run `spritekit prompts ... --out {args.art}` first", file=sys.stderr)
+        return 2
+    pack = json.loads(pack_path.read_text())
+    only = {s.strip() for s in args.only.split(",")} if args.only else None
+    if args.emit_ps1:
+        cx.write_prompt_files(pack, art)
+        (art / "run_codex.ps1").write_text(cx.powershell_script(pack, args.codex, args.model, args.parallel))
+        print(f"wrote {art / 'run_codex.ps1'} and codex_prompts/ ({len(pack['prompts'])} jobs, {args.parallel} at a time)")
+        return 0
+    if args.dry_run:
+        for job in cx.jobs_from_pack(pack):
+            if only and job.step not in only:
+                continue
+            after = f" after {', '.join(job.after)}" if job.after else ""
+            print(f"# {job.output}{after}\n{' '.join(cx.codex_command(job, art, args.codex, args.model))}  < prompt")
+        return 0
+    if shutil.which(args.codex) is None and not Path(args.codex).exists():
+        print(f"`{args.codex}` not found. Install the Codex CLI (npm i -g @openai/codex), sign in with `codex login`, "
+              "or pass --codex PATH.", file=sys.stderr)
+        return 2
+    results = cx.run(pack, art, args.codex, args.model, args.parallel, args.retries, only)
+    failed = [r for r in results.values() if r.status != "ok"]
+    print(f"{len(results) - len(failed)}/{len(results)} images ready in {art} (log: codex_run.json, codex_logs/)")
+    if failed:
+        for r in failed:
+            print(f"  {r.name}: {r.status} - {r.message}")
+        return 1
+    files = [str(art / p["file"]) for p in pack["prompts"] if p["step"] == "exploded"]
+    size = pack["character"].get("sprite_px", 64)
+    height = round(size * 44 / 64)
+    print("next:\n  python3 -m spritekit build " + " ".join(files) + f" --views {','.join(pack['views'])} "
+          f"--bvh mocap/07_01.bvh --size {size}x{size} --height {height} --out {art / 'out'}")
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -242,6 +284,17 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--bvh-path", default="mocap/07_01.bvh", help="BVH path used in the suggested build command")
     q.add_argument("--out", help="write prompts.md and prompts.json here instead of printing")
     q.set_defaults(func=cmd_prompts)
+
+    x = sub.add_parser("codex", help="ask Codex directly (codex exec) for every image in a prompt pack")
+    x.add_argument("art", help="folder holding prompts.json; images are saved here")
+    x.add_argument("--codex", default="codex", help="Codex CLI executable")
+    x.add_argument("--model", help="Codex model override")
+    x.add_argument("--parallel", type=int, default=3, help="Codex jobs at a time")
+    x.add_argument("--retries", type=int, default=2, help="re-asks per exploded view that fails the check")
+    x.add_argument("--only", help="comma-separated steps: design,turnaround,exploded,heads")
+    x.add_argument("--dry-run", action="store_true", help="print the codex commands without running them")
+    x.add_argument("--emit-ps1", action="store_true", help="write run_codex.ps1 (PowerShell, Avaruun style) instead")
+    x.set_defaults(func=cmd_codex)
 
     c = sub.add_parser("check", help="check returned drawings and write a corrective prompt")
     c.add_argument("drawings", nargs="+")

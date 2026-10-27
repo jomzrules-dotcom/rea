@@ -13,6 +13,7 @@ pixel    Hi-res to pixel-art reduction with a shared palette and outline.
 sheet    Sheet packing, Aseprite-compatible JSON, GIF previews.
 pipeline Picture -> rig -> poses -> pixel frames -> directions -> sheet.
 prompts  Image-model prompts (base model, turnaround, exploded views) and art checks.
+codex    Ask Codex directly: run a prompt pack through `codex exec`, re-ask failing views.
 demo     Synthetic exploded-view character used by the demo and tests.
 """
 

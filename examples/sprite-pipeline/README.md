@@ -12,7 +12,8 @@ directions:
 - **Prompts** writes the prompts an image model (Codex) needs to draw that
   character: the base model, a turnaround, and an exploded rig view for each of
   front, 45° front, side, 45° back and back. It also checks the returned art
-  and writes corrective prompts.
+  and writes corrective prompts. `spritekit codex` sends the prompts to Codex
+  directly through `codex exec` and re-asks until every view passes the check.
 
 [`SKILL.md`](SKILL.md) is the same workflow written as instructions for an agent.
 
@@ -253,6 +254,45 @@ right. Other options: `--name`, `--style`, `--game`, `--heads`, `--accent`,
 the final frame size so it designs for readability, and is passed to the
 suggested build command. Without `--out` the prompts are printed as Markdown; with `--out` you
 also get `prompts.json`.
+
+### Asking Codex directly (`codex.py`)
+
+Instead of pasting prompts by hand, `spritekit codex` sends every prompt in
+the pack to the Codex CLI as a non-interactive `codex exec` job, the way the
+Avaruun project does ("Claude codes, Codex paints"):
+
+```bash
+npm i -g @openai/codex && codex login       # once, on the machine that runs it
+python3 -m spritekit prompts --name Malfoid --character "..." --out art
+python3 -m spritekit codex art              # design -> turnaround -> 5 views, 3 jobs at a time
+```
+
+Each job runs:
+
+```
+codex exec --skip-git-repo-check --enable image_generation -s workspace-write \
+    -C art --ephemeral -o art/codex_logs/<job>.last.txt -i art/design.png -i art/turnaround.png  < prompt
+```
+
+- **Order:** jobs follow the references they attach. The design comes first,
+  then the turnaround, then the exploded views and head sheet, at most
+  `--parallel` jobs at once (default 3).
+- **No quoting problems:** the prompt goes through stdin, so no shell quoting
+  can mangle it.
+- **Automatic fixes:** every exploded view is run through `check`. A failing
+  view goes back to Codex with the corrective prompt and the rejected drawing
+  attached, up to `--retries` times (default 2). Rejected versions are kept as
+  `<view>.tryN.png`.
+- **Logs:** `codex_logs/<job>.log` and `codex_run.json` record every attempt.
+  When everything passes, it prints the exact `build` command.
+- **Options:** `--dry-run` prints the commands without running them,
+  `--only exploded` re-runs one step, and `--model`/`--codex` override the
+  model and executable.
+- **PowerShell:** `--emit-ps1` writes `run_codex.ps1` plus `codex_prompts/`
+  instead, the same jobs as a Windows PowerShell script (`Start-Job`, 3 at a
+  time). Prompts are read from files and piped as UTF-8, so `$` and `°` survive.
+
+Codex needs to be installed, signed in, and able to reach `api.openai.com`.
 
 ### Checking what comes back
 
