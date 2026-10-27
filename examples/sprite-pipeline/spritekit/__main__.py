@@ -143,7 +143,7 @@ def cmd_prompts(args: argparse.Namespace) -> int:
     character = pr.Character(
         args.character, style=args.style, game=args.game, heads_tall=args.heads, accent=args.accent,
         weapon=args.weapon, hairstyles=[h.strip() for h in (args.hair or "").split(",") if h.strip()],
-        sprite_px=args.sprite_size, loose_part=args.loose_part, name=args.name)
+        sprite_px=args.sprite_size, loose_part=args.loose_part, name=args.name, covered_hips=args.covered_hips)
     pack = pr.prompt_pack(character, args.directions, args.layout, args.bvh_path)
     md = pr.to_markdown(pack)
     if args.out:
@@ -281,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--weapon", help='e.g. "short sword"')
     q.add_argument("--hair", help="comma-separated hairstyles for a head sheet")
     q.add_argument("--sprite-size", type=int, default=64, help="final square frame size in px")
+    q.add_argument("--covered-hips", action="store_true",
+                   help="a skirt, robe or dress hides the hips: hip dots go on it, thighs drawn below")
     q.add_argument("--bvh-path", default="mocap/07_01.bvh", help="BVH path used in the suggested build command")
     q.add_argument("--out", help="write prompts.md and prompts.json here instead of printing")
     q.set_defaults(func=cmd_prompts)

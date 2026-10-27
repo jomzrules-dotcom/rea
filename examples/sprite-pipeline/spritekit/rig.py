@@ -4,7 +4,9 @@ Input conventions (what the artist is asked for):
   * flat #FF00FF background, no shadows or text;
   * every body part separated by a small even gap;
   * a solid #00FF00 dot centred in the gap at every joint: neck, both shoulders,
-    both elbows, both hips, both knees (shoulder dots may be omitted);
+    both elbows, both hips, both knees (shoulder dots may be omitted). When a
+    skirt or robe covers the hips, the hip dots sit ON it at the hip joints and
+    the thighs are drawn complete below it; the dot holes are refilled;
   * both arms and both legs drawn; the torso complete under the arms.
 
 Output: one :class:`Rig` per figure with parts moved together (gaps closed with
@@ -193,6 +195,7 @@ def segment(arr: np.ndarray, figures: int, params: RigParams | None = None) -> S
     keyed = im.key_magenta(arr)
     fg = keyed & ~grown
     clean = arr.copy()
+    _fill_dots_on_parts(arr, clean, fg, grown)
     clean[~fg] = 0
 
     labels, n = im.label_components(fg)
@@ -213,6 +216,39 @@ def segment(arr: np.ndarray, figures: int, params: RigParams | None = None) -> S
         x1 = max(p.box[2] for p in group)
         groups.append((group, [d for d in dots if x0 - 20 <= d[0] <= x1 + 20]))
     return Segmentation(clean, labels, groups, float((~keyed).mean()))
+
+
+def _dilate(mask: np.ndarray, r: int) -> np.ndarray:
+    out = mask.copy()
+    for _ in range(r):
+        grown = out.copy()
+        grown[1:] |= out[:-1]
+        grown[:-1] |= out[1:]
+        grown[:, 1:] |= out[:, :-1]
+        grown[:, :-1] |= out[:, 1:]
+        out = grown
+    return out
+
+
+def _fill_dots_on_parts(arr: np.ndarray, clean: np.ndarray, fg: np.ndarray, dots: np.ndarray,
+                        enclosed: float = 0.85) -> None:
+    """A joint dot drawn ON a part (hip dots on a skirt that covers the hips) would
+    leave a hole once removed; refill it with the surrounding part colour.
+
+    Dots in the gap between parts are mostly surrounded by background and stay out.
+    """
+    labels, n = im.label_components(dots)
+    h, w = dots.shape
+    for b in im.blobs(labels, n):
+        y0, y1, x0, x1 = max(b.y0 - 3, 0), min(b.y1 + 3, h), max(b.x0 - 3, 0), min(b.x1 + 3, w)
+        region = labels[y0:y1, x0:x1] == b.label
+        ring = _dilate(region, 2) & ~region
+        ring_fg = ring & fg[y0:y1, x0:x1]
+        if ring.sum() == 0 or ring_fg.sum() / ring.sum() < enclosed:
+            continue
+        colour = np.median(arr[y0:y1, x0:x1][ring_fg], axis=0).astype(np.uint8)
+        clean[y0:y1, x0:x1][region] = colour
+        fg[y0:y1, x0:x1] |= region
 
 
 def auto_rig(arr: np.ndarray, views: list[str], params: RigParams | None = None) -> list[Rig]:

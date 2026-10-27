@@ -245,6 +245,9 @@ class PromptTests(unittest.TestCase):
         md = pr.to_markdown(pack)
         self.assertIn("Directions: 8", md)
         self.assertTrue(md.startswith("# Sprite art prompts: Knight\n"))
+        self.assertNotIn("hip dots ON the skirt", pack.prompts[2].text)
+        robed = pr.prompt_pack(pr.Character("witch", covered_hips=True), 8)
+        self.assertIn("hip dots ON the skirt", robed.prompts[2].text)
         no_tail = pr.prompt_pack(pr.Character("mage", accent="green lining"), 4)
         self.assertNotIn("tail", no_tail.prompts[-1].text)
         self.assertIn("64x64 px game sprite with the character about 44 px tall", pack.prompts[0].text)
@@ -409,6 +412,24 @@ class RigTests(unittest.TestCase):
                 for bone, target in ((f"upper_arm_{s}", 90 + sign * 8), (f"thigh_{s}", 90 + sign * 1.5)):
                     ang = math.degrees(rigmod._world_rest_angle(r.bones, bone))
                     self.assertAlmostEqual(ang % 360, target, delta=0.01)
+
+    def test_hip_dots_on_a_skirt_pivot_the_legs_at_the_hips(self):
+        art, truth = demo.exploded_views(("front_left", "back"), skirt=30)
+        for r, t in zip(rigmod.auto_rig(art, ["front_left", "back"]), truth):
+            self.assertEqual(r.warnings, [])
+            for s in "ab":
+                # pivot near the hip dot on the skirt, not at the skirt hem 30 px lower
+                self.assertLess(abs(r.bones[f"thigh_{s}"].pivot[1] - t[f"hip_{s}"][1]), 5)
+            order = pipeline.draw_order(r, "a", "a")
+            base = render.translate(-(r.root[0] - 150), 0)
+            img = render.render(r, render.Pose(), (300, 420), order, base)
+            _, n = im.label_components(img[..., 3] > 0)
+            self.assertEqual(n, 1)
+            x, y = t["hip_a"]
+            hole = img[int(y) - 2:int(y) + 3, int(x - (r.root[0] - 150)) - 2:int(x - (r.root[0] - 150)) + 3]
+            self.assertTrue((hole[..., 3] == 255).all())  # dot hole refilled
+            self.assertFalse((hole[..., 1] > 200).any())  # and not green
+        self.assertTrue(pr.review(art, ["front_left", "back"]).ok)
 
     def test_missing_shoulder_dots_are_inferred(self):
         art = self.art.copy()

@@ -19,6 +19,7 @@ HAIR = (122, 74, 42)
 TUNIC = (64, 104, 196)
 PANTS = (78, 66, 92)
 BOOTS = (96, 62, 40)
+SKIRT = (52, 49, 47)
 GREEN = (0, 255, 0)
 MAGENTA = (255, 0, 255)
 
@@ -42,7 +43,8 @@ def _shaded_capsule(draw, a, b, r, colour, dark=1.0, outline=3):
     _capsule(draw, a + off * 1.8, b + off * 1.8, max(r * 0.25, 1), _shade(colour, 1.18 * dark))
 
 
-def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) -> dict[str, tuple[float, float]]:
+def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0,
+            skirt: float = 0.0) -> dict[str, tuple[float, float]]:
     """Draw one exploded figure; returns its joint dot positions."""
     back = view.startswith("back")
     side_view = view.startswith("side")
@@ -77,6 +79,12 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
     draw.rounded_rectangle([cx - tw + 3, t0 + 3, cx + tw - 3, t1 - 3], 12, fill=_shade(TUNIC, 0.8))
     draw.rounded_rectangle([cx - tw + 8, t0 + 6, cx + tw - 18, t1 - 22], 10, fill=TUNIC)
     draw.rectangle([cx - tw + 3, t1 - 28, cx + tw - 3, t1 - 18], fill=BOOTS)
+    if skirt:  # a skirt that covers the hips, drawn as part of the torso
+        flare = 10
+        draw.polygon([(cx - tw, t1 - 18), (cx + tw, t1 - 18), (cx + tw + flare, t1 + skirt), (cx - tw - flare, t1 + skirt)],
+                     fill=OUTLINE)
+        draw.polygon([(cx - tw + 3, t1 - 15), (cx + tw - 3, t1 - 15), (cx + tw + flare - 3, t1 + skirt - 3),
+                      (cx - tw - flare + 3, t1 + skirt - 3)], fill=SKIRT)
     if not back and not side_view:
         bx = cx + face_shift
         draw.rectangle([bx - 7, t1 - 30, bx + 7, t1 - 16], fill=(230, 200, 80))
@@ -96,7 +104,7 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
         joints[f"shoulder_{side}"] = shoulder
         joints[f"elbow_{side}"] = tuple(elbow)
 
-        hip = (cx + sx * 20, t1 + g2)
+        hip = (cx + sx * 20, t1 + g2 + skirt)  # legs start below the skirt when there is one
         lu = np.array([math.cos(math.radians(90 - sx * 6)), math.sin(math.radians(90 - sx * 6))])
         tl, sl, lr = 46.0, 44.0, 15.0
         knee = np.array(hip) + lu * (tl + gap)
@@ -107,19 +115,21 @@ def _figure(draw: ImageDraw.ImageDraw, cx: float, view: str, gap: float = 12.0) 
         boot_a = shin_end + np.array([0, -2])
         boot_b = shin_end + np.array([toe * 12, 6 if toe else 8])
         _shaded_capsule(draw, boot_a, boot_b, lr - 1, BOOTS, dark)
-        joints[f"hip_{side}"] = hip
+        # with a skirt the hip dot sits ON the skirt, at the real hip joint
+        joints[f"hip_{side}"] = (hip[0], t1 - 4) if skirt else hip
         joints[f"knee_{side}"] = tuple(knee)
     return joints
 
 
-def exploded_views(views: tuple[str, ...] = ("front_left", "back_left"), dot_radius: int = 4) -> tuple[np.ndarray, list[dict]]:
+def exploded_views(views: tuple[str, ...] = ("front_left", "back_left"), dot_radius: int = 4,
+                   skirt: float = 0.0) -> tuple[np.ndarray, list[dict]]:
     """RGBA drawing with one exploded figure per view, plus the true joint positions."""
     width = 300 * len(views)
     img = Image.new("RGBA", (width, 420), MAGENTA + (255,))
     draw = ImageDraw.Draw(img)
     truth = []
     for i, v in enumerate(views):
-        joints = _figure(draw, 150 + 300 * i, v)
+        joints = _figure(draw, 150 + 300 * i, v, skirt=skirt)
         for x, y in joints.values():
             draw.ellipse([x - dot_radius, y - dot_radius, x + dot_radius, y + dot_radius], fill=GREEN)
         truth.append(joints)

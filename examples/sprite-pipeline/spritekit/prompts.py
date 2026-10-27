@@ -59,6 +59,7 @@ class Character:
     weapon: str | None = None  # e.g. "short sword"
     hairstyles: list[str] = field(default_factory=list)
     sprite_px: int = 64  # final square game frame; the character is ~69% of it tall
+    covered_hips: bool = False  # a skirt, robe or dress hides the hip joints
 
     @property
     def sprite_height(self) -> int:
@@ -150,12 +151,23 @@ _EXPLODED_RULES = (
 )
 
 
+_COVERED_HIPS = (
+    "The skirt/robe covers the hips: keep it attached to the torso, put the two hip dots ON the skirt exactly where "
+    "the hip joints are, and draw each thigh complete from the hip down as its own part below the skirt hem. "
+    "Always 9 dots in total."
+)
+
+
+def _rules(c: Character) -> str:
+    return _EXPLODED_RULES + ("\n" + _COVERED_HIPS if c.covered_hips else "")
+
+
 def exploded_prompt(c: Character, view: str) -> str:
     v = VIEWS[view]
     return (
         f"Using the attached character design and turnaround, draw ONE exploded view of the same character: "
         f"{v.label} ({v.facing}).\n"
-        f"Parts: {_parts(c)}.\n{v.limbs}\n{_EXPLODED_RULES}\n"
+        f"Parts: {_parts(c)}.\n{v.limbs}\n{_rules(c)}\n"
         "Same scale, palette and 1 px outline as the design. The figure fills about 80% of the image height. "
         "Solid flat #FF00FF background, no shadows, no text."
     )
@@ -166,7 +178,7 @@ def exploded_sheet_prompt(c: Character, views: list[str]) -> str:
     return (
         f"Using the attached character design and turnaround, draw {len(views)} exploded views of the same character "
         f"side by side on one image, left to right:\n{order}\n"
-        f"Parts in every view: {_parts(c)}.\n{_EXPLODED_RULES}\n"
+        f"Parts in every view: {_parts(c)}.\n{_rules(c)}\n"
         "Leave a wide empty gap between the figures. Same scale, palette and 1 px outline in every view. "
         "Solid flat #FF00FF background, no shadows, no text."
     )
