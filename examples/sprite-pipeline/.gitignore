@@ -1,0 +1,6 @@
+# generated art, sheets and downloaded motion capture
+mocap/
+out/
+demo-out/
+*.png
+*.gif

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sprite Viewer</title>
+<style>
+  :root { --bg: #f4f3f0; --fg: #1d1b22; --muted: #6b6775; --panel: #ffffff; --line: #dcd9e2; --accent: #4a63c9; --stage: #e6e3ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #17161b; --fg: #ece9f2; --muted: #9d98a8; --panel: #211f27; --line: #34313d; --accent: #8ea0f0; --stage: #2a2833; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; align-items: center; }
+  button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); cursor: pointer; }
+  button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  label { color: var(--muted); }
+  #stage { background: var(--stage); border-radius: 8px; display: inline-block; padding: 12px; max-width: 100%; overflow: auto; }
+  canvas { image-rendering: pixelated; display: block; }
+  #strip { margin-top: 12px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>Sprite Viewer</h1>
+<div class="row" id="anims" aria-label="Animations"></div>
+<div class="row">
+  <button id="play" aria-pressed="true">Pause</button>
+  <button id="step">Step</button>
+  <label>Speed <input id="speed" type="range" min="0.25" max="2" step="0.25" value="1"></label>
+  <label>Zoom <input id="zoom" type="range" min="2" max="10" step="1" value="6"></label>
+  <label><input id="onion" type="checkbox"> Onion skin</label>
+  <label><input id="pivot" type="checkbox" checked> Pivot</label>
+</div>
+<div id="stage"><canvas id="view"></canvas></div>
+<p class="muted" id="info"></p>
+<div id="stage2" class="row"><canvas id="strip"></canvas></div>
+<script>
+const META = /*META*/null;
+const img = new Image();
+img.src = META.meta.image;
+const tags = META.meta.frameTags;
+let tag = tags[0], frame = 0, playing = true, last = 0, acc = 0;
+const view = document.getElementById("view"), ctx = view.getContext("2d");
+const strip = document.getElementById("strip"), sctx = strip.getContext("2d");
+const $ = id => document.getElementById(id);
+function chips() {
+  const box = $("anims"); box.innerHTML = "";
+  for (const t of tags) {
+    const b = document.createElement("button");
+    b.textContent = t.name; b.setAttribute("aria-pressed", t === tag);
+    b.onclick = () => { tag = t; frame = 0; chips(); drawStrip(); };
+    box.appendChild(b);
+  }
+}
+function fr(i) { return META.frames[tag.from + i]; }
+function count() { return tag.to - tag.from + 1; }
+function blit(c, f, x, y, z, alpha) {
+  c.globalAlpha = alpha;
+  c.drawImage(img, f.frame.x, f.frame.y, f.frame.w, f.frame.h, x, y, f.frame.w * z, f.frame.h * z);
+  c.globalAlpha = 1;
+}
+function draw() {
+  const z = +$("zoom").value, f = fr(frame);
+  view.width = f.frame.w * z; view.height = f.frame.h * z;
+  ctx.imageSmoothingEnabled = false;
+  if ($("onion").checked) blit(ctx, fr((frame + count() - 1) % count()), 0, 0, z, 0.3);
+  blit(ctx, f, 0, 0, z, 1);
+  if ($("pivot").checked && f.pivot) {
+    ctx.strokeStyle = "#e0457b"; ctx.lineWidth = 1;
+    const px = f.pivot.x * f.frame.w * z, py = f.pivot.y * f.frame.h * z;
+    ctx.beginPath(); ctx.moveTo(0, py + 0.5); ctx.lineTo(view.width, py + 0.5);
+    ctx.moveTo(px + 0.5, py - 6 * z); ctx.lineTo(px + 0.5, py + 2 * z); ctx.stroke();
+  }
+  $("info").textContent = `${tag.name} frame ${frame + 1}/${count()} · ${f.duration} ms · ${f.frame.w}x${f.frame.h}`;
+}
+function drawStrip() {
+  const n = count(), f0 = fr(0), z = 2;
+  strip.width = f0.frame.w * z * n; strip.height = f0.frame.h * z;
+  sctx.imageSmoothingEnabled = false;
+  for (let i = 0; i < n; i++) blit(sctx, fr(i), i * f0.frame.w * z, 0, z, 1);
+}
+function tick(t) {
+  if (playing) {
+    acc += (t - last) * +$("speed").value;
+    while (acc >= fr(frame).duration) { acc -= fr(frame).duration; frame = (frame + 1) % count(); }
+  }
+  last = t; draw(); requestAnimationFrame(tick);
+}
+$("play").onclick = e => { playing = !playing; e.target.textContent = playing ? "Pause" : "Play"; e.target.setAttribute("aria-pressed", playing); };
+$("step").onclick = () => { playing = false; $("play").textContent = "Play"; $("play").setAttribute("aria-pressed", false); frame = (frame + 1) % count(); };
+img.onload = () => { chips(); drawStrip(); requestAnimationFrame(t => { last = t; tick(t); }); };
+</script>
+</body>
+</html>
